@@ -1,0 +1,23 @@
+# Environment variables - NEVER push these
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node modules
+dashboard/node_modules/
+dashboard/.next/
+
+# Docker volumes
+postgres_data/
+model_cache/
+
+# VS Code
+.vscode/
+
+# Python virtual env
+venv/
+env/
