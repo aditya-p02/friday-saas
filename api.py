@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, BackgroundTasks
 from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List
 from openai import OpenAI
@@ -7,13 +7,11 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from sentence_transformers import SentenceTransformer
+from fastapi.middleware.cors import CORSMiddleware
 from database import init_db, get_db, LeadRecord, find_similar_leads
-from fastapi import BackgroundTasks
 from email_service import send_drafted_email
 
 load_dotenv()
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="FRIDAY Sales Operations Platform",
@@ -179,7 +177,47 @@ async def get_all_leads(db: AsyncSession = Depends(get_db)):
             detail=f"Failed to fetch leads: {str(e)}"
         )
 
-# --- Route 4: Get single lead by ID ---
+# --- Route 4: Get all pending approval leads ---
+@app.get("/api/v1/leads/pending/approval")
+async def get_pending_leads(db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            text("SELECT id, lead_name, email, source, lead_tier, qualification_score, drafted_response_email, created_at FROM leads WHERE status = 'pending_approval' ORDER BY created_at DESC")
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "id": str(row.id),
+                "lead_name": row.lead_name,
+                "email": row.email,
+                "source": row.source,
+                "lead_tier": row.lead_tier,
+                "qualification_score": row.qualification_score,
+                "drafted_response_email": row.drafted_response_email,
+                "created_at": str(row.created_at)
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch pending leads: {str(e)}"
+        )
+
+# --- Route 5: Delete all leads ---
+@app.delete("/api/v1/leads")
+async def delete_all_leads(db: AsyncSession = Depends(get_db)):
+    try:
+        await db.execute(text("DELETE FROM leads"))
+        await db.commit()
+        return {"message": "All leads deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete all leads: {str(e)}"
+        )
+
+# --- Route 6: Get single lead by ID ---
 @app.get("/api/v1/leads/{lead_id}")
 async def get_lead_by_id(lead_id: str, db: AsyncSession = Depends(get_db)):
     try:
@@ -211,34 +249,7 @@ async def get_lead_by_id(lead_id: str, db: AsyncSession = Depends(get_db)):
             detail=f"Failed to fetch lead: {str(e)}"
         )
 
-# --- Route 5: Get all pending approval leads ---
-@app.get("/api/v1/leads/pending/approval")
-async def get_pending_leads(db: AsyncSession = Depends(get_db)):
-    try:
-        result = await db.execute(
-            text("SELECT id, lead_name, email, source, lead_tier, qualification_score, drafted_response_email, created_at FROM leads WHERE status = 'pending_approval' ORDER BY created_at DESC")
-        )
-        rows = result.fetchall()
-        return [
-            {
-                "id": str(row.id),
-                "lead_name": row.lead_name,
-                "email": row.email,
-                "source": row.source,
-                "lead_tier": row.lead_tier,
-                "qualification_score": row.qualification_score,
-                "drafted_response_email": row.drafted_response_email,
-                "created_at": str(row.created_at)
-            }
-            for row in rows
-        ]
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch pending leads: {str(e)}"
-        )
-
-# --- Route 6: Approve a lead and send email ---
+# --- Route 7: Approve a lead and send email ---
 @app.post("/api/v1/leads/{lead_id}/approve")
 async def approve_lead(
     lead_id: str,
@@ -254,7 +265,6 @@ async def approve_lead(
         if not row:
             raise HTTPException(status_code=404, detail="Lead not found")
 
-        # Send the email in background
         background_tasks.add_task(
             send_drafted_email,
             to_email=row.email,
@@ -262,7 +272,6 @@ async def approve_lead(
             body=row.drafted_response_email
         )
 
-        # Update status to approved
         await db.execute(
             text("UPDATE leads SET status = 'approved' WHERE id = :id"),
             {"id": lead_id}
@@ -279,7 +288,7 @@ async def approve_lead(
             detail=f"Failed to approve lead: {str(e)}"
         )
 
-# --- Route 7: Reject a lead ---
+# --- Route 8: Reject a lead ---
 @app.post("/api/v1/leads/{lead_id}/reject")
 async def reject_lead(lead_id: str, db: AsyncSession = Depends(get_db)):
     try:
@@ -305,4 +314,31 @@ async def reject_lead(lead_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to reject lead: {str(e)}"
+        )
+
+# --- Route 9: Delete a single lead ---
+@app.delete("/api/v1/leads/{lead_id}")
+async def delete_lead(lead_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            text("SELECT id FROM leads WHERE id = :id"),
+            {"id": lead_id}
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        await db.execute(
+            text("DELETE FROM leads WHERE id = :id"),
+            {"id": lead_id}
+        )
+        await db.commit()
+        return {"message": "Lead deleted successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete lead: {str(e)}"
         )

@@ -8,6 +8,7 @@ export default function LeadsPage() {
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("ALL");
+  const [selected, setSelected] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/leads`)
@@ -17,6 +18,41 @@ export default function LeadsPage() {
   }, []);
 
   const filtered = filter === "ALL" ? leads : leads.filter((l) => l.lead_tier === filter);
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]);
+  }
+
+  function toggleSelectAll() {
+    if (selected.length === filtered.length) {
+      setSelected([]);
+    } else {
+      setSelected(filtered.map((l) => l.id));
+    }
+  }
+
+  async function deleteSelected() {
+    if (!confirm(`Delete ${selected.length} selected leads?`)) return;
+    await Promise.all(selected.map((id) =>
+      fetch(`${API_BASE}/api/v1/leads/${id}`, { method: "DELETE" })
+    ));
+    setLeads(leads.filter((l) => !selected.includes(l.id)));
+    setSelected([]);
+  }
+
+  async function deleteAll() {
+    if (!confirm("Delete ALL leads? This cannot be undone.")) return;
+    await fetch(`${API_BASE}/api/v1/leads`, { method: "DELETE" });
+    setLeads([]);
+    setSelected([]);
+  }
+
+  async function deleteSingle(id: string, name: string) {
+    if (!confirm(`Delete ${name}?`)) return;
+    await fetch(`${API_BASE}/api/v1/leads/${id}`, { method: "DELETE" });
+    setLeads(leads.filter((l) => l.id !== id));
+    setSelected(selected.filter((s) => s !== id));
+  }
 
   if (loading) return (
     <main style={{ background: "var(--bg-primary)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -35,26 +71,38 @@ export default function LeadsPage() {
           <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>{leads.length} total leads captured</p>
         </div>
 
-        {/* Filter buttons */}
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          {/* Filter buttons */}
           {["ALL", "HIGH", "MEDIUM", "LOW"].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
               style={{
-                padding: "0.4rem 1rem",
-                borderRadius: "4px",
-                fontSize: "0.8rem",
-                fontWeight: 600,
-                cursor: "pointer",
+                padding: "0.4rem 1rem", borderRadius: "4px", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer",
                 border: filter === f ? "none" : "1px solid var(--border)",
                 background: filter === f ? "var(--xbox-green)" : "transparent",
                 color: filter === f ? "#fff" : "var(--text-secondary)"
               }}
-            >
-              {f}
-            </button>
+            >{f}</button>
           ))}
+
+          {/* Delete selected */}
+          {selected.length > 0 && (
+            <button
+              onClick={deleteSelected}
+              style={{ padding: "0.4rem 1rem", borderRadius: "4px", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", background: "rgba(255,50,50,0.15)", color: "#ff6b6b", border: "1px solid rgba(255,50,50,0.3)" }}
+            >
+              Delete {selected.length} selected
+            </button>
+          )}
+
+          {/* Clear all */}
+          <button
+            onClick={deleteAll}
+            style={{ padding: "0.4rem 1rem", borderRadius: "4px", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", background: "transparent", color: "#555", border: "1px solid #333" }}
+          >
+            Clear All
+          </button>
         </div>
       </div>
 
@@ -63,6 +111,14 @@ export default function LeadsPage() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
+              <th style={{ padding: "0.85rem 1rem", width: "40px" }}>
+                <input
+                  type="checkbox"
+                  checked={selected.length === filtered.length && filtered.length > 0}
+                  onChange={toggleSelectAll}
+                  style={{ cursor: "pointer", accentColor: "var(--xbox-green)" }}
+                />
+              </th>
               {["Name", "Email", "Source", "Tier", "Score", "Status", "Date", ""].map((h) => (
                 <th key={h} style={{ textAlign: "left", padding: "0.85rem 1rem", color: "var(--text-secondary)", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.5px", fontWeight: 600 }}>{h}</th>
               ))}
@@ -70,7 +126,15 @@ export default function LeadsPage() {
           </thead>
           <tbody>
             {filtered.map((lead) => (
-              <tr key={lead.id} style={{ borderBottom: "1px solid var(--border)" }}>
+              <tr key={lead.id} style={{ borderBottom: "1px solid var(--border)", background: selected.includes(lead.id) ? "rgba(16,124,16,0.05)" : "transparent" }}>
+                <td style={{ padding: "0.85rem 1rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(lead.id)}
+                    onChange={() => toggleSelect(lead.id)}
+                    style={{ cursor: "pointer", accentColor: "var(--xbox-green)" }}
+                  />
+                </td>
                 <td style={{ padding: "0.85rem 1rem", fontWeight: 500, fontSize: "0.9rem" }}>{lead.lead_name}</td>
                 <td style={{ padding: "0.85rem 1rem", color: "var(--text-secondary)", fontSize: "0.8rem" }}>{lead.email}</td>
                 <td style={{ padding: "0.85rem 1rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>{lead.source}</td>
@@ -90,8 +154,12 @@ export default function LeadsPage() {
                   }}>{lead.status === "none" ? "—" : lead.status.replace("_", " ")}</span>
                 </td>
                 <td style={{ padding: "0.85rem 1rem", color: "var(--text-secondary)", fontSize: "0.8rem" }}>{new Date(lead.created_at).toLocaleDateString()}</td>
-                <td style={{ padding: "0.85rem 1rem" }}>
+                <td style={{ padding: "0.85rem 1rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
                   <Link href={`/leads/${lead.id}`} style={{ color: "var(--xbox-green-light)", fontSize: "0.8rem", textDecoration: "none", fontWeight: 500 }}>View →</Link>
+                  <button
+                    onClick={() => deleteSingle(lead.id, lead.lead_name)}
+                    style={{ background: "transparent", color: "#555", border: "none", fontSize: "0.8rem", cursor: "pointer", padding: "0" }}
+                  >✕</button>
                 </td>
               </tr>
             ))}
