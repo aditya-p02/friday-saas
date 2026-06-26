@@ -46,6 +46,7 @@ class LeadRecord(Base):
     agent_reasoning = Column(Text, nullable=False)
     drafted_response_email = Column(Text, nullable=False)
     embedding = Column(Vector(384), nullable=True)
+    status = Column(String, nullable=False, default="none")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 # --- 6. Initialize DB on startup ---
@@ -53,6 +54,11 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        # Add status column if it doesn't exist (for existing databases)
+        await conn.execute(text("""
+            ALTER TABLE leads 
+            ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'none'
+        """))
 
 # --- 7. Dependency for FastAPI routes ---
 async def get_db():

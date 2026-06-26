@@ -1,69 +1,121 @@
+"use client";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getLeadById } from "@/lib/api";
+import { useParams } from "next/navigation";
 
-export default async function LeadDetailPage({ params }: { params: { id: string } }) {
-  let lead = null;
-  try {
-    lead = await getLeadById(params.id);
-  } catch (e) {
-    lead = null;
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+export default function LeadDetailPage() {
+  const params = useParams();
+  const [lead, setLead] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [actionDone, setActionDone] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/leads/${params.id}`)
+      .then((r) => r.json())
+      .then((data) => { setLead(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [params.id]);
+
+  async function approveLead() {
+    await fetch(`${API_BASE}/api/v1/leads/${params.id}/approve`, { method: "POST" });
+    setLead({ ...lead, status: "approved" });
+    setActionDone(true);
   }
 
-  if (!lead) {
-    return (
-      <main className="min-h-screen bg-gray-950 text-white p-8">
-        <Link href="/leads" className="text-gray-400 text-sm hover:underline">
-          ← Back to Leads
-        </Link>
-        <p className="mt-8 text-red-400">Lead not found.</p>
-      </main>
-    );
+  async function rejectLead() {
+    await fetch(`${API_BASE}/api/v1/leads/${params.id}/reject`, { method: "POST" });
+    setLead({ ...lead, status: "rejected" });
+    setActionDone(true);
   }
+
+  if (loading) return (
+    <main style={{ background: "var(--bg-primary)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ color: "var(--xbox-green-light)", fontSize: "1.2rem" }}>Loading...</div>
+    </main>
+  );
+
+  if (!lead) return (
+    <main style={{ background: "var(--bg-primary)", minHeight: "100vh", padding: "2rem" }}>
+      <Link href="/leads" style={{ color: "var(--text-secondary)", fontSize: "0.8rem", textDecoration: "none" }}>← Back</Link>
+      <p style={{ color: "#ff6b6b", marginTop: "2rem" }}>Lead not found.</p>
+    </main>
+  );
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-8 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <Link href="/leads" className="text-gray-400 text-sm hover:underline">
-          ← Back to Leads
-        </Link>
+    <main style={{ background: "var(--bg-primary)", minHeight: "100vh", padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
+
+      {/* Back */}
+      <Link href="/leads" style={{ color: "var(--text-secondary)", fontSize: "0.8rem", textDecoration: "none" }}>← Back to Leads</Link>
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", margin: "1.5rem 0 2rem", paddingBottom: "1.5rem", borderBottom: "1px solid var(--border)" }}>
+        <div>
+          <h1 style={{ fontSize: "1.8rem", fontWeight: 700, color: "#fff" }}>{lead.lead_name}</h1>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "0.3rem" }}>{lead.email} · {lead.source}</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <span style={{
+            padding: "0.4rem 1rem", borderRadius: "4px", fontSize: "0.8rem", fontWeight: 700,
+            background: lead.lead_tier === "HIGH" ? "var(--xbox-green)" : lead.lead_tier === "MEDIUM" ? "#2a2a2a" : "#1a1a1a",
+            color: lead.lead_tier === "HIGH" ? "#fff" : lead.lead_tier === "MEDIUM" ? "#a0a0a0" : "#666"
+          }}>{lead.lead_tier}</span>
+          <span style={{ color: "var(--xbox-green-light)", fontWeight: 700, fontSize: "1.1rem" }}>{lead.qualification_score}</span>
+        </div>
       </div>
 
-      {/* Lead Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold">{lead.lead_name}</h1>
-          <p className="text-gray-400 mt-1">{lead.email} · {lead.source}</p>
+      {/* Approval buttons — only show for pending */}
+      {lead.status === "pending_approval" && !actionDone && (
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--xbox-green)", borderRadius: "6px", padding: "1.25rem", marginBottom: "1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <p style={{ color: "var(--xbox-green-light)", fontWeight: 600, fontSize: "0.9rem" }}>⚡ Awaiting your approval</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginTop: "0.2rem" }}>Approve to send the drafted email to this lead</p>
+          </div>
+          <div style={{ display: "flex", gap: "0.75rem" }}>
+            <button
+              onClick={approveLead}
+              style={{ background: "var(--xbox-green)", color: "#fff", border: "none", padding: "0.6rem 1.5rem", borderRadius: "4px", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+            >
+              ✓ Approve & Send
+            </button>
+            <button
+              onClick={rejectLead}
+              style={{ background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)", padding: "0.6rem 1.5rem", borderRadius: "4px", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+            >
+              ✕ Reject
+            </button>
+          </div>
         </div>
-        <span className={`px-4 py-2 rounded-full text-sm font-bold ${
-          lead.lead_tier === "HIGH" ? "bg-green-900 text-green-400" :
-          lead.lead_tier === "MEDIUM" ? "bg-yellow-900 text-yellow-400" :
-          "bg-red-900 text-red-400"
-        }`}>
-          {lead.lead_tier} · {lead.qualification_score}
-        </span>
-      </div>
+      )}
+
+      {/* Status badge for approved/rejected */}
+      {(lead.status === "approved" || lead.status === "rejected") && (
+        <div style={{ background: "var(--bg-card)", border: `1px solid ${lead.status === "approved" ? "var(--xbox-green)" : "#333"}`, borderRadius: "6px", padding: "1rem 1.25rem", marginBottom: "1.5rem" }}>
+          <p style={{ color: lead.status === "approved" ? "var(--xbox-green-light)" : "#ff6b6b", fontWeight: 600, fontSize: "0.9rem" }}>
+            {lead.status === "approved" ? "✓ Email sent to this lead" : "✕ Lead rejected"}
+          </p>
+        </div>
+      )}
 
       {/* Lead Message */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
-        <h2 className="text-sm text-gray-400 mb-3 uppercase tracking-wider">Lead Message</h2>
-        <p className="text-gray-200 leading-relaxed">{lead.raw_message}</p>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "6px", padding: "1.5rem", marginBottom: "1rem" }}>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.75rem" }}>Lead Message</p>
+        <p style={{ color: "#e0e0e0", lineHeight: 1.7, fontSize: "0.9rem" }}>{lead.raw_message}</p>
       </div>
 
       {/* AI Reasoning */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
-        <h2 className="text-sm text-gray-400 mb-3 uppercase tracking-wider">AI Reasoning</h2>
-        <p className="text-gray-200 leading-relaxed">{lead.agent_reasoning}</p>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "6px", padding: "1.5rem", marginBottom: "1rem" }}>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.75rem" }}>AI Reasoning</p>
+        <p style={{ color: "#e0e0e0", lineHeight: 1.7, fontSize: "0.9rem" }}>{lead.agent_reasoning}</p>
       </div>
 
       {/* Drafted Email */}
-      <div className="bg-gray-900 rounded-xl border border-blue-900 p-6">
-        <h2 className="text-sm text-blue-400 mb-3 uppercase tracking-wider">
-          Drafted Response Email
-        </h2>
-        <pre className="text-gray-200 leading-relaxed whitespace-pre-wrap font-sans">
-          {lead.drafted_response_email}
-        </pre>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--xbox-green)", borderRadius: "6px", padding: "1.5rem" }}>
+        <p style={{ color: "var(--xbox-green-light)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.75rem" }}>Drafted Response Email</p>
+        <pre style={{ color: "#e0e0e0", lineHeight: 1.7, fontSize: "0.88rem", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>{lead.drafted_response_email}</pre>
       </div>
+
     </main>
   );
 }

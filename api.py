@@ -13,10 +13,20 @@ from email_service import send_drafted_email
 
 load_dotenv()
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="FRIDAY Sales Operations Platform",
-    description="Phase 3: Lead Qualification + Vector Memory + Semantic Search",
-    version="3.0.0"
+    description="Phase 4: Lead Qualification + Vector Memory + Approval System",
+    version="4.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- Load embedding model once at startup ---
@@ -62,8 +72,8 @@ class SimilarLeadResult(BaseModel):
 # --- Route 1: Analyze and save a lead ---
 @app.post("/api/v1/analyze-lead", response_model=LeadAnalysisResponse)
 async def analyze_incoming_lead(
-    lead: LeadInput, 
-    background_tasks: BackgroundTasks, # <-- ADDED THIS
+    lead: LeadInput,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     try:
@@ -99,10 +109,13 @@ async def analyze_incoming_lead(
         raw_json_output = completion.choices[0].message.content
         result = LeadAnalysisResponse.model_validate_json(raw_json_output)
 
-        # --- Generate embedding from the lead's message ---
+        # --- Generate embedding ---
         embedding_vector = embedding_model.encode(lead.raw_message).tolist()
 
-        # --- Save lead to PostgreSQL with embedding ---
+        # --- Set status based on tier ---
+        lead_status = "pending_approval" if result.lead_tier == "HIGH" else "none"
+
+        # --- Save lead to PostgreSQL ---
         lead_record = LeadRecord(
             lead_name=result.lead_name,
             email=lead.email,
@@ -112,20 +125,11 @@ async def analyze_incoming_lead(
             lead_tier=result.lead_tier,
             agent_reasoning=result.agent_reasoning,
             drafted_response_email=result.drafted_response_email,
-            embedding=embedding_vector
+            embedding=embedding_vector,
+            status=lead_status
         )
         db.add(lead_record)
         await db.commit()
-
-        # --- THE NEW AUTOMATED SENDING LOGIC ---
-        # Only send automatically if the AI scores them as HIGH
-        if result.lead_tier == "HIGH":
-            background_tasks.add_task(
-                send_drafted_email,
-                to_email=lead.email,
-                subject=f"Regarding your inquiry via {lead.source}",
-                body=result.drafted_response_email
-            )
 
         return result
 
@@ -147,13 +151,13 @@ async def get_similar_leads(lead: LeadInput, db: AsyncSession = Depends(get_db))
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"FRIDAY Similarity Search Error: {str(e)}"
         )
-    
+
 # --- Route 3: Get all leads ---
 @app.get("/api/v1/leads")
 async def get_all_leads(db: AsyncSession = Depends(get_db)):
     try:
         result = await db.execute(
-            text("SELECT id, lead_name, email, source, lead_tier, qualification_score, created_at FROM leads ORDER BY created_at DESC")
+            text("SELECT id, lead_name, email, source, lead_tier, qualification_score, status, created_at FROM leads ORDER BY created_at DESC")
         )
         rows = result.fetchall()
         return [
@@ -164,6 +168,7 @@ async def get_all_leads(db: AsyncSession = Depends(get_db)):
                 "source": row.source,
                 "lead_tier": row.lead_tier,
                 "qualification_score": row.qualification_score,
+                "status": row.status,
                 "created_at": str(row.created_at)
             }
             for row in rows
@@ -195,6 +200,7 @@ async def get_lead_by_id(lead_id: str, db: AsyncSession = Depends(get_db)):
             "qualification_score": row.qualification_score,
             "agent_reasoning": row.agent_reasoning,
             "drafted_response_email": row.drafted_response_email,
+            "status": row.status,
             "created_at": str(row.created_at)
         }
     except HTTPException:
@@ -203,4 +209,100 @@ async def get_lead_by_id(lead_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch lead: {str(e)}"
+        )
+
+# --- Route 5: Get all pending approval leads ---
+@app.get("/api/v1/leads/pending/approval")
+async def get_pending_leads(db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            text("SELECT id, lead_name, email, source, lead_tier, qualification_score, drafted_response_email, created_at FROM leads WHERE status = 'pending_approval' ORDER BY created_at DESC")
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "id": str(row.id),
+                "lead_name": row.lead_name,
+                "email": row.email,
+                "source": row.source,
+                "lead_tier": row.lead_tier,
+                "qualification_score": row.qualification_score,
+                "drafted_response_email": row.drafted_response_email,
+                "created_at": str(row.created_at)
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch pending leads: {str(e)}"
+        )
+
+# --- Route 6: Approve a lead and send email ---
+@app.post("/api/v1/leads/{lead_id}/approve")
+async def approve_lead(
+    lead_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        result = await db.execute(
+            text("SELECT * FROM leads WHERE id = :id"),
+            {"id": lead_id}
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        # Send the email in background
+        background_tasks.add_task(
+            send_drafted_email,
+            to_email=row.email,
+            subject=f"Regarding your inquiry via {row.source}",
+            body=row.drafted_response_email
+        )
+
+        # Update status to approved
+        await db.execute(
+            text("UPDATE leads SET status = 'approved' WHERE id = :id"),
+            {"id": lead_id}
+        )
+        await db.commit()
+
+        return {"message": f"Lead approved. Email sending to {row.email}"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to approve lead: {str(e)}"
+        )
+
+# --- Route 7: Reject a lead ---
+@app.post("/api/v1/leads/{lead_id}/reject")
+async def reject_lead(lead_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            text("SELECT id FROM leads WHERE id = :id"),
+            {"id": lead_id}
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        await db.execute(
+            text("UPDATE leads SET status = 'rejected' WHERE id = :id"),
+            {"id": lead_id}
+        )
+        await db.commit()
+
+        return {"message": "Lead rejected successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reject lead: {str(e)}"
         )
